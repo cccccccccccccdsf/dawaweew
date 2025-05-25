@@ -1,0 +1,1228 @@
+// ==UserScript==
+// @name         Богдан парса олд
+// @namespace    http://tampermonkey.net/
+// @version      2025-05-26
+// @description  Современный интерфейс с анимациями, процентным изменением цены, ценой транзакции, поддержкой ETH, масштабированием таблиц, объединением транзакций, добавлением токенов MEXC, множеством таблиц, сохранением настроек и автоматическим сбросом памяти
+// @author       You
+// @match        https://gmgn.ai/*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=gmgn.ai
+// @grant        GM_getValue
+// @grant        GM_setValue
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    console.log('[Уведомление о транзакциях] Скрипт запущен');
+
+    // Звуки
+    const sounds = {
+        option1: {
+            buy: new Audio('https://raw.githubusercontent.com/xeonise/sigmadan/refs/heads/main/pokypka228.mp3'),
+            sell: new Audio('https://raw.githubusercontent.com/xeonise/sigmadan/refs/heads/main/prodazha228.mp3')
+        },
+        option2: {
+            buy: new Audio('https://raw.githubusercontent.com/xeonise/sigmadan/refs/heads/main/long228.mp3'),
+            sell: new Audio('https://raw.githubusercontent.com/xeonise/sigmadan/refs/heads/main/shorti228.mp3')
+        },
+        option3: {
+            buy: new Audio('https://raw.githubusercontent.com/xeonise/sigmadan/refs/heads/main/zelalong.mp3'),
+            sell: new Audio('https://raw.githubusercontent.com/xeonise/sigmdan/refs/heads/main/zelashort.mp3')
+        }
+    };
+
+    // Конфигурация
+    const GMGN_WS_URL = 'wss://ws.gmgn.ai/quotation';
+    const MEXC_WS_URL = 'wss://contract.mexc.com/edge';
+    const chainMap = {
+        '195': 'tron',
+        '501': 'sol',
+        '81457': 'blast',
+        '56': 'bsc',
+        '1': 'ethereum',
+        '784': 'sui',
+        '8453': 'base'
+    };
+    const MAX_PREVIOUS_TRANSACTIONS = 1000;
+    const DEFAULT_MEMORY_LIMIT = 2000; // MB
+    const DEFAULT_AMOUNT_BUTTONS = [1000, 2000, 5000, 10000];
+
+    // Переменные
+    let tokenList = [];
+    let wsGmgn = null;
+    let wsMexc = null;
+    let transactionQueue = { buy: [], sell: [] };
+    let previousTransactions = new Set();
+    let currentFilterAmount = 1000;
+    let currentFilterTime = 10;
+    let mergeTransactions = false;
+    let mergeWindow = 50; // ms (10, 50, 100)
+    let pendingAudioQueue = [];
+    let currentBackgroundColor = '#1e1e1e';
+    let isTableVisible = true;
+    let isSoundEnabled = true;
+    let soundMode = 'transaction';
+    let selectedSound = 'option1';
+    let lastDominance = 'neutral';
+    let lastDifference = 0;
+    let isNewTransaction = false;
+    let currentTokenAddress = null;
+    let currentChain = null;
+    let filterPanel = null;
+    let tables = [];
+    let priceTable = null;
+    let mexcPrice = null;
+    let dexPrice = null;
+    let tokenName = null;
+    let isPriceTableVisible = true;
+    let priceDecimals = 5;
+    let lastPriceUpdate = Date.now();
+    let reconnectAttempts = 0;
+    let maxReconnectAttempts = Infinity;
+    let tableScale = 1;
+    let memoryLimit = DEFAULT_MEMORY_LIMIT;
+    let monitorMemory = false;
+    let customAmountButtons = [...DEFAULT_AMOUNT_BUTTONS];
+
+    // Загрузка настроек
+    function loadSettings() {
+        currentFilterAmount = GM_getValue('filterAmount', 1000);
+        currentFilterTime = GM_getValue('filterTime', 10);
+        currentBackgroundColor = GM_getValue('backgroundColor', '#1e1e1e');
+        isTableVisible = GM_getValue('isTableVisible', true);
+        isPriceTableVisible = GM_getValue('isPriceTableVisible', true);
+        isSoundEnabled = GM_getValue('isSoundEnabled', true);
+        soundMode = GM_getValue('soundMode', 'transaction');
+        selectedSound = GM_getValue('selectedSound', 'option1');
+        tableScale = GM_getValue('tableScale', 1);
+        mergeTransactions = GM_getValue('mergeTransactions', false);
+        mergeWindow = GM_getValue('mergeWindow', 50);
+        memoryLimit = GM_getValue('memoryLimit', DEFAULT_MEMORY_LIMIT);
+        monitorMemory = GM_getValue('monitorMemory', false);
+        customAmountButtons = GM_getValue('customAmountButtons', [...DEFAULT_AMOUNT_BUTTONS]);
+        customAmountButtons.sort((a, b) => a - b);
+        log('Настройки загружены', { currentFilterAmount, currentFilterTime, currentBackgroundColor, tableScale });
+    }
+
+    // Сохранение настроек
+    function saveSettings() {
+        GM_setValue('filterAmount', currentFilterAmount);
+        GM_setValue('filterTime', currentFilterTime);
+        GM_setValue('backgroundColor', currentBackgroundColor);
+        GM_setValue('isTableVisible', isTableVisible);
+        GM_setValue('isPriceTableVisible', isPriceTableVisible);
+        GM_setValue('isSoundEnabled', isSoundEnabled);
+        GM_setValue('soundMode', soundMode);
+        GM_setValue('selectedSound', selectedSound);
+        GM_setValue('tableScale', tableScale);
+        GM_setValue('mergeTransactions', mergeTransactions);
+        GM_setValue('mergeWindow', mergeWindow);
+        GM_setValue('memoryLimit', memoryLimit);
+        GM_setValue('monitorMemory', monitorMemory);
+        GM_setValue('customAmountButtons', customAmountButtons);
+        log('Настройки сохранены');
+    }
+
+    function log(message, data = '') {
+        console.log(`[${new Date().toISOString()}] [Уведомление о транзакциях] ${message}`, data);
+    }
+
+    // Нормализация цены
+function normalizePrice(priceStr) {
+    try {
+        if (priceStr == null || typeof priceStr === 'undefined') {
+            console.error('normalizePrice: Invalid input:', priceStr);
+            return null;
+        }
+        priceStr = String(priceStr); // Convert to string
+        const match = priceStr.match(/^\d*\.?\d+[eE]?[-+]?\d*$/); // Handle decimals and scientific
+        if (!match) {
+            console.error('normalizePrice: Invalid price format:', priceStr);
+            return null;
+        }
+        return parseFloat(priceStr); // Return as number
+    } catch (error) {
+        console.error('Error in normalizePrice:', error, 'priceStr:', priceStr);
+        return null;
+    }
+}
+
+    // Динамическая настройка количества десятичных знаков
+    function adjustDecimals(price) {
+        if (!price || isNaN(price)) return 5;
+        const absPrice = Math.abs(price);
+        if (absPrice < 0.00000001) return 12;
+        if (absPrice < 0.000001) return 10;
+        if (absPrice < 0.0001) return 8;
+        if (absPrice < 0.01) return 6;
+        return 5;
+    }
+
+    async function loadTokens() {
+        try {
+            const response = await fetch('https://raw.githubusercontent.com/cccccccccccccdsf/dawaweew/refs/heads/main/tokens.json');
+            if (!response.ok) throw new Error(`HTTP ошибка! Статус: ${response.status}`);
+            const data = await response.json();
+            if (!Array.isArray(data)) throw new Error('tokens.json должен быть массивом');
+            tokenList = data.filter(token =>
+                typeof token.address === 'string' &&
+                typeof token.ticker === 'string' &&
+                typeof token.mexcSymbol === 'string'
+            );
+            // Загрузка пользовательских токенов
+            const customTokens = GM_getValue('customTokens', []);
+            tokenList = [...tokenList, ...customTokens];
+            log('Токены загружены', tokenList);
+        } catch (e) {
+            log('Ошибка загрузки tokens.json:', e);
+            alert('Не удалось загрузить tokens.json.');
+        }
+    }
+
+    function cleanup() {
+        log('Очистка ресурсов');
+        if (wsGmgn) { wsGmgn.close(); wsGmgn = null; }
+        if (wsMexc) { wsMexc.close(); wsMexc = null; }
+        if (filterPanel) { filterPanel.remove(); filterPanel = null; }
+        tables.forEach(t => {
+            clearInterval(t.table.getAttribute('data-timer-id'));
+            t.table.remove();
+        });
+        tables = [];
+        if (priceTable) { priceTable.remove(); priceTable = null; }
+        transactionQueue = { buy: [], sell: [] };
+        previousTransactions.clear();
+        pendingAudioQueue = [];
+        mexcPrice = null;
+        dexPrice = null;
+        tokenName = null;
+        reconnectAttempts = 0;
+        log('Очистка завершена');
+    }
+
+    function closeBanner() {
+        const banner = document.querySelector('.css-12rtj2z');
+        if (banner && banner.classList.contains('banner')) {
+            banner.style.display = 'none';
+            log('Баннер скрыт');
+        }
+    }
+
+    function hexToRgb(hex) {
+        const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+        return result ? {
+            r: parseInt(result[1], 16),
+            g: parseInt(result[2], 16),
+            b: parseInt(result[3], 16)
+        } : null;
+    }
+
+    function applyBackgroundColor(color) {
+        const rgb = hexToRgb(color);
+        const rgbaColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.98)`;
+        if (filterPanel) filterPanel.style.background = rgbaColor;
+        tables.forEach(t => t.table.style.background = rgbaColor);
+        if (priceTable) priceTable.style.background = rgbaColor;
+        currentBackgroundColor = color;
+        saveSettings();
+        log(`Цвет фона изменен на: ${color}`);
+    }
+
+    function applyTableScale() {
+        tables.forEach(t => {
+            t.table.style.transform = `scale(${tableScale})`;
+            t.table.style.transformOrigin = 'top left';
+        });
+        if (priceTable) {
+            priceTable.style.transform = `scale(${tableScale})`;
+            priceTable.style.transformOrigin = 'top left';
+        }
+        saveSettings();
+        log(`Масштаб таблиц изменен на: ${tableScale}`);
+    }
+
+    function getChainAndTokenFromURL() {
+        const url = window.location.href;
+        const regex = /\/(tron|sol|blast|bsc|ethereum|sui|base)\/token\/([a-zA-Z0-9]+)/;
+        const match = url.match(regex);
+        if (match) {
+            const network = match[1];
+            const tokenAddress = match[2];
+            const chainId = Object.keys(chainMap).find(key => chainMap[key] === network);
+            return { chain: network, tokenAddress, chainId };
+        }
+        return null;
+    }
+
+    function getTokenName() {
+        const element = document.querySelector('span.text-text-100.text-xl.font-semibold.leading-\\[21px\\]');
+        return element ? element.textContent.trim() : 'Неизвестный токен';
+    }
+
+    function formatNumberWithSpaces(number) {
+        return number.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    }
+
+    function generateGmgnSubscribeMessage(chain, tokenAddress) {
+        const randomIdStat = `stat-${Math.random().toString(36).substr(2, 9)}`;
+        const randomIdActivity = `activity-${Math.random().toString(36).substr(2, 9)}`;
+        return [
+            {
+                action: 'subscribe',
+                channel: 'token_stat',
+                id: randomIdStat,
+                data: [{ chain, addresses: tokenAddress }]
+            },
+            {
+                action: 'subscribe',
+                channel: 'token_activity',
+                id: randomIdActivity,
+                data: [{ chain, addresses: tokenAddress }]
+            }
+        ];
+    }
+
+    function generateMexcSubscribeMessage(symbol) {
+        return {
+            method: 'sub.deal',
+            param: {
+                symbol: symbol,
+                instType: 'futures'
+            }
+        };
+    }
+
+    function initGmgnWebSocket(chain, tokenAddress) {
+        wsGmgn = new WebSocket(GMGN_WS_URL);
+        wsGmgn.onopen = () => {
+            log('Подключено к GMGN WebSocket');
+            generateGmgnSubscribeMessage(chain, tokenAddress).forEach(msg => wsGmgn.send(JSON.stringify(msg)));
+        };
+        wsGmgn.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                if (!data || !data.channel || !data.data) {
+                    log('Некорректные данные от GMGN WebSocket:', data);
+                    return;
+                }
+                if (data.channel === 'token_activity') {
+                    data.data.forEach(activity => {
+                        if (activity.a === tokenAddress && activity.au && activity.e) {
+                            const isBuy = activity.e === 'buy';
+                            let volume = parseFloat(activity.au || 0);
+                            const txHash = activity.id || `tx-${Math.random().toString(36).substr(2, 9)}`;
+                            const transactionPrice = normalizePrice(activity.p || dexPrice || '0');
+                            if (previousTransactions.has(txHash)) {
+                                log('Обнаружена дублирующаяся транзакция:', txHash);
+                                return;
+                            }
+                            previousTransactions.add(txHash);
+                            if (previousTransactions.size > MAX_PREVIOUS_TRANSACTIONS) {
+                                const iterator = previousTransactions.values();
+                                previousTransactions.delete(iterator.next().value);
+                            }
+                            if (mergeTransactions) {
+                                mergeTransaction(isBuy ? 'buy' : 'sell', volume, txHash, transactionPrice);
+                            } else if (volume >= currentFilterAmount) {
+                                const type = isBuy ? 'buy' : 'sell';
+                                transactionQueue[type].push({ amount: volume, startTime: Date.now(), transactionId: txHash, transactionPrice });
+                                isNewTransaction = true;
+                                updateAllTransactionTables();
+                            }
+                        }
+                    });
+                } else if (data.channel === 'token_stat') {
+                    data.data.forEach(stat => {
+                        if (stat.a === tokenAddress && stat.p) {
+                            dexPrice = normalizePrice(stat.p);
+                            priceDecimals = adjustDecimals(dexPrice);
+                            updatePriceTable();
+                        }
+                    });
+                }
+            } catch (e) {
+                log('Ошибка обработки GMGN WebSocket:', e);
+            }
+        };
+        wsGmgn.onerror = (error) => log('Ошибка GMGN WebSocket:', error);
+        wsGmgn.onclose = () => { wsGmgn = null; log('GMGN WebSocket закрыт'); };
+    }
+
+    function mergeTransaction(type, amount, transactionId, transactionPrice) {
+        const now = Date.now();
+        const windowMs = mergeWindow;
+        let merged = false;
+
+        // Попытка объединить с существующими транзакциями в окне времени
+        transactionQueue[type] = transactionQueue[type].filter(t => (now - t.startTime) < windowMs);
+        for (let i = 0; i < transactionQueue[type].length; i++) {
+            if ((now - transactionQueue[type][i].startTime) < windowMs) {
+                transactionQueue[type][i].amount += amount;
+                transactionQueue[type][i].transactionPrice = (transactionQueue[type][i].transactionPrice * transactionQueue[type][i].amount + transactionPrice * amount) / (transactionQueue[type][i].amount + amount);
+                transactionQueue[type][i].startTime = now; // Обновляем время
+                merged = true;
+                break;
+            }
+        }
+        if (!merged) {
+            transactionQueue[type].push({ amount, startTime: now, transactionId, transactionPrice });
+        }
+        // Проверяем, проходит ли объединенная транзакция фильтр
+        transactionQueue[type] = transactionQueue[type].filter(t => t.amount >= currentFilterAmount);
+        isNewTransaction = true;
+        updateAllTransactionTables();
+    }
+
+    function initMexcWebSocket(symbols) {
+        if (!symbols || symbols.length === 0) {
+            mexcPrice = null;
+            updatePriceTable();
+            return;
+        }
+        if (wsMexc) wsMexc.close();
+        function connect() {
+            wsMexc = new WebSocket(MEXC_WS_URL);
+            let pingInterval = null;
+            wsMexc.onopen = () => {
+                log('Подключено к MEXC WebSocket');
+                reconnectAttempts = 0;
+                symbols.forEach(symbol => wsMexc.send(JSON.stringify(generateMexcSubscribeMessage(symbol))));
+                pingInterval = setInterval(() => {
+                    if (wsMexc && wsMexc.readyState === WebSocket.OPEN) wsMexc.send('ping');
+                }, 30000);
+            };
+            wsMexc.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (!data || !data.channel || !data.data) {
+                        log('Некорректные данные от MEXC WebSocket:', data);
+                        return;
+                    }
+                    if (data.channel === 'push.deal' && data.data.p) {
+                        const price = normalizePrice(data.data.p);
+                        if (price > 0) {
+                            mexcPrice = price;
+                            priceDecimals = Math.max(priceDecimals, adjustDecimals(mexcPrice));
+                            lastPriceUpdate = Date.now();
+                            updatePriceTable();
+                        }
+                    }
+                } catch (e) {
+                    log('Ошибка обработки MEXC WebSocket:', e);
+                }
+            };
+            wsMexc.onerror = (error) => log('Ошибка MEXC WebSocket:', error);
+            wsMexc.onclose = () => {
+                clearInterval(pingInterval);
+                wsMexc = null;
+                if (reconnectAttempts < maxReconnectAttempts) {
+                    reconnectAttempts++;
+                    setTimeout(connect, 500);
+                }
+            };
+        }
+        connect();
+        setInterval(() => {
+            if (wsMexc && wsMexc.readyState === WebSocket.OPEN && Date.now() - lastPriceUpdate > 180000) {
+                log('Цена MEXC не обновлялась 3 минуты');
+                wsMexc.close();
+            }
+        }, 30000);
+    }
+
+    function createPriceTable() {
+        if (priceTable) return;
+        priceTable = document.createElement('div');
+        priceTable.className = 'gmgn-script-container';
+        priceTable.style.cssText = `
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            background: rgba(30, 30, 30, 0.98);
+            color: white;
+            padding: 24px;
+            border-radius: 20px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+            z-index: 1000;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            width: 320px;
+            cursor: move;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(12px);
+            transform: scale(${tableScale});
+            transform-origin: top left;
+        `;
+        document.body.appendChild(priceTable);
+        applyBackgroundColor(currentBackgroundColor);
+
+        let isDragging = false;
+        let xOffset = 0, yOffset = 0;
+        const onMouseDown = (e) => {
+            const rect = priceTable.getBoundingClientRect();
+            isDragging = true;
+            xOffset = e.clientX - rect.left;
+            yOffset = e.clientY - rect.top;
+        };
+        const onMouseMove = (e) => {
+            if (isDragging) {
+                e.preventDefault();
+                priceTable.style.left = `${e.clientX - xOffset}px`;
+                priceTable.style.top = `${e.clientY - yOffset}px`;
+            }
+        };
+        const onMouseUp = () => { isDragging = false; };
+        priceTable.addEventListener('mousedown', onMouseDown);
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+        priceTable.dataset.listeners = 'true';
+        updatePriceTable();
+    }
+
+    function updatePriceTable() {
+        if (!priceTable) return;
+        const displayTokenName = tokenName || 'Неизвестный токен';
+        const dexPriceStr = dexPrice !== null ? dexPrice.toFixed(priceDecimals) : 'N/A';
+        const mexcPriceStr = mexcPrice !== null ? mexcPrice.toFixed(priceDecimals) : 'N/A';
+        let percentageDiff = 'N/A';
+        let arrow = '';
+        let mexcColor = 'white';
+        if (dexPrice !== null && mexcPrice !== null && dexPrice !== 0) {
+            percentageDiff = (((mexcPrice - dexPrice) / dexPrice) * 100).toFixed(2);
+            percentageDiff = percentageDiff >= 0 ? `+${percentageDiff}` : percentageDiff;
+            arrow = mexcPrice > dexPrice ? '↑' : '↓';
+            mexcColor = mexcPrice > dexPrice ? '#34d399' : '#f87171';
+        }
+        priceTable.innerHTML = `
+            <div style="font-size: 22px; font-weight: 700; margin-bottom: 12px; color: #f3f4f6;">${displayTokenName}</div>
+            <div style="border-bottom: 2px solid #f87171; margin-bottom: 12px;"></div>
+            <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                <span style="width: 80px; font-weight: 500; color: #d1d5db;">DEX</span>
+                <span style="font-family: 'JetBrains Mono', monospace; color: #f3f4f6;">${dexPriceStr}</span>
+            </div>
+            <div style="display: flex; align-items: center;">
+                <span style="width: 80px; font-weight: 500; color: #d1d5db;">MEXC</span>
+                <span style="font-family: 'JetBrains Mono', monospace; color: ${mexcColor}; margin-right: 12px;">${mexcPriceStr} ${arrow}</span>
+                <span style="margin-left: auto; font-size: 14px; color: #9ca3af;">(${percentageDiff}%)</span>
+            </div>
+        `;
+        priceTable.style.display = isPriceTableVisible ? 'block' : 'none';
+    }
+
+    function createFilterPanel() {
+        if (filterPanel) return;
+        filterPanel = document.createElement('div');
+        filterPanel.className = 'gmgn-script-container';
+        filterPanel.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(30, 30, 30, 0.98);
+            color: white;
+            padding: 24px;
+            border-radius: 20px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+            z-index: 1000;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            width: 360px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(12px);
+            transform: scale(${tableScale});
+            transform-origin: top right;
+            transition: transform 0.3s ease, opacity 0.3s ease;
+        `;
+        filterPanel.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <div style="font-size: 24px; font-weight: 700; color: #f3f4f6;">Настройки</div>
+                <button id="toggleFilters" style="background: none; border: none; color: #f3f4f6; font-size: 28px; cursor: pointer; transition: transform 0.3s ease;">▶</button>
+            </div>
+            <div id="filterContent" style="display: none; opacity: 0; transform: translateY(10px); transition: opacity 0.3s ease, transform 0.3s ease;">
+                <div class="collapsible-section" style="margin-bottom: 20px;">
+                    <div class="section-header" style="display: flex; justify-content: space-between; cursor: pointer;">
+                        <div style="font-weight: 600; color: #f3f4f6;">Фильтр суммы</div>
+                        <button class="toggle-section" style="background: none; border: none; color: #f3f4f6; cursor: pointer; transition: transform 0.3s ease;">▼</button>
+                    </div>
+                    <div class="section-content">
+                        <div id="currentFilterDisplay" style="margin: 14px 0; color: #9ca3af; font-size: 15px;">Текущий: ${currentFilterAmount} $</div>
+                        <div style="display: flex; flex-wrap: wrap; gap: 12px;" id="amountButtons">
+                            ${customAmountButtons.map(amount => `<button class="filter-btn amount-btn" data-amount="${amount}">${amount} $</button>`).join('')}
+                        </div>
+                        <div style="margin-top: 14px; display: flex; gap: 12px;">
+                            <input type="number" id="customFilterAmount" placeholder="Своя сумма $" style="width: 150px; padding: 10px; background: #2d2d2d; border: 1px solid #4b5563; color: #f3f4f6; border-radius: 10px; font-family: 'Inter'; transition: border-color 0.2s ease;">
+                            <button id="applyCustomFilter" class="apply-btn">Применить</button>
+                        </div>
+                        <div style="margin-top: 14px;">
+                            <input type="number" id="newAmountButton" placeholder="Новый фильтр суммы $" style="width: 150px; padding: 10px; background: #2d2d2d; border: 1px solid #4b5563; color: #f3f4f6; border-radius: 10px; font-family: 'Inter'; transition: border-color 0.2s ease;">
+                            <button id="addAmountButton" class="apply-btn">Добавить кнопку</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="collapsible-section" style="margin-bottom: 20px;">
+                    <div class="section-header" style="display: flex; justify-content: space-between; cursor: pointer;">
+                        <div style="font-weight: 600; color: #f3f4f6;">Фильтр времени</div>
+                        <button class="toggle-section" style="background: none; border: none; color: #f3f4f6; cursor: pointer; transition: transform 0.3s ease;">▼</button>
+                    </div>
+                    <div class="section-content">
+                        <div id="currentTimeFilterDisplay" style="margin: 14px 0; color: #9ca3af; font-size: 15px;">Текущий: ${currentFilterTime}с</div>
+                        <div style="display: flex; flex-wrap: wrap; gap: 12px;">
+                            <button class="filter-btn time-btn" data-time="10">10с</button>
+                            <button class="filter-btn time-btn" data-time="30">30с</button>
+                            <button class="filter-btn time-btn" data-time="60">60с</button>
+                            <button class="filter-btn time-btn" data-time="120">120с</button>
+                        </div>
+                        <div style="margin-top: 14px; display: flex; gap: 12px;">
+                            <input type="number" id="customFilterTime" placeholder="Своя длительность (с)" style="width: 150px; padding: 10px; background: #2d2d2d; border: 1px solid #4b5563; color: #f3f4f6; border-radius: 10px; font-family: 'Inter'; transition: border-color 0.2s ease;">
+                            <button id="applyCustomTimeFilter" class="apply-btn">Применить</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="collapsible-section" style="margin-bottom: 20px;">
+                    <div class="section-header" style="display: flex; justify-content: space-between; cursor: pointer;">
+                        <div style="font-weight: 600; color: #f3f4f6;">Объединение транзакций</div>
+                        <button class="toggle-section" style="background: none; border: none; color: #f3f4f6; cursor: pointer; transition: transform 0.3s ease;">▶</button>
+                    </div>
+                    <div class="section-content" style="display: none;">
+                        <label style="display: flex; align-items: center; gap: 12px; margin: 14px 0; color: #d1d5db;">
+                            <input type="checkbox" id="mergeTransactions" ${mergeTransactions ? 'checked' : ''} style="accent-color: #f87171; width: 18px; height: 18px; cursor: pointer;">
+                            Включить объединение транзакций
+                        </label>
+                        <div style="margin: 14px 0;">
+                            <label style="display: flex; align-items: center; gap: 12px; color: #d1d5db;">
+                                <input type="radio" name="mergeWindow" value="10" ${mergeWindow === 10 ? 'checked' : ''} style="accent-color: #f87171; width: 18px; height: 18px; cursor: pointer;">
+                                10 мс
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 12px; margin-top: 12px; color: #d1d5db;">
+                                <input type="radio" name="mergeWindow" value="50" ${mergeWindow === 50 ? 'checked' : ''} style="accent-color: #f87171; width: 18px; height: 18px; cursor: pointer;">
+                                50 мс
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 12px; margin-top: 12px; color: #d1d5db;">
+                                <input type="radio" name="mergeWindow" value="100" ${mergeWindow === 100 ? 'checked' : ''} style="accent-color: #f87171; width: 18px; height: 18px; cursor: pointer;">
+                                100 мс
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div class="collapsible-section" style="margin-bottom: 20px;">
+                    <div class="section-header" style="display: flex; justify-content: space-between; cursor: pointer;">
+                        <div style="font-weight: 600; color: #f3f4f6;">Добавление токенов MEXC</div>
+                        <button class="toggle-section" style="background: none; border: none; color: #f3f4f6; cursor: pointer; transition: transform 0.3s ease;">▶</button>
+                    </div>
+                    <div class="section-content" style="display: none;">
+                        <div style="margin: 14px 0;">
+                            <input type="text" id="newTokenAddress" placeholder="Адрес токена" style="width: 100%; padding: 10px; background: #2d2d2d; border: 1px solid #4b5563; color: #f3f4f6; border-radius: 10px; font-family: 'Inter'; transition: border-color 0.2s ease; margin-bottom: 12px;">
+                            <input type="text" id="newTokenTicker" placeholder="Тикер токена" style="width: 100%; padding: 10px; background: #2d2d2d; border: 1px solid #4b5563; color: #f3f4f6; border-radius: 10px; font-family: 'Inter'; transition: border-color 0.2s ease; margin-bottom: 12px;">
+                            <input type="text" id="newTokenMexcSymbol" placeholder="MEXC символ" style="width: 100%; padding: 10px; background: #2d2d2d; border: 1px solid #4b5563; color: #f3f4f6; border-radius: 10px; font-family: 'Inter'; transition: border-color 0.2s ease; margin-bottom: 12px;">
+                            <button id="addToken" class="apply-btn">Добавить токен</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="collapsible-section" style="margin-bottom: 20px;">
+                    <div class="section-header" style="display: flex; justify-content: space-between; cursor: pointer;">
+                        <div style="font-weight: 600; color: #f3f4f6;">Масштаб таблиц</div>
+                        <button class="toggle-section" style="background: none; border: none; color: #f3f4f6; cursor: pointer; transition: transform 0.3s ease;">▶</button>
+                    </div>
+                    <div class="section-content" style="display: none;">
+                        <input type="range" id="tableScale" min="0.5" max="2" step="0.1" value="${tableScale}" style="width: 100%; margin: 14px 0; accent-color: #f87171;">
+                        <div style="color: #9ca3af; font-size: 15px;">Текущий масштаб: <span id="currentScaleDisplay">${(tableScale * 100).toFixed(0)}%</span></div>
+                    </div>
+                </div>
+                <div class="collapsible-section" style="margin-bottom: 20px;">
+                    <div class="section-header" style="display: flex; justify-content: space-between; cursor: pointer;">
+                        <div style="font-weight: 600; color: #f3f4f6;">Управление таблицами</div>
+                        <button class="toggle-section" style="background: none; border: none; color: #f3f4f6; cursor: pointer; transition: transform 0.3s ease;">▶</button>
+                    </div>
+                    <div class="section-content" style="display: none;">
+                        <button id="addTable" class="apply-btn" style="width: 100%; margin-bottom: 12px;">Добавить таблицу</button>
+                        <div id="tableList" style="margin: 14px 0;"></div>
+                    </div>
+                </div>
+                <div class="collapsible-section" style="margin-bottom: 20px;">
+                    <div class="section-header" style="display: flex; justify-content: space-between; cursor: pointer;">
+                        <div style="font-weight: 600; color: #f3f4f6;">Контроль памяти</div>
+                        <button class="toggle-section" style="background: none; border: none; color: #f3f4f6; cursor: pointer; transition: transform 0.3s ease;">▶</button>
+                    </div>
+                    <div class="section-content" style="display: none;">
+                        <label style="display: flex; align-items: center; gap: 12px; margin: 14px 0; color: #d1d5db;">
+                            <input type="checkbox" id="monitorMemory" ${monitorMemory ? 'checked' : ''} style="accent-color: #f87171; width: 18px; height: 18px; cursor: pointer;">
+                            Включить контроль памяти
+                        </label>
+                        <div style="margin-top: 14px; display: flex; gap: 12px;">
+                            <input type="number" id="memoryLimit" value="${memoryLimit}" placeholder="Лимит памяти (МБ)" style="width: 150px; padding: 10px; background: #2d2d2d; border: 1px solid #4b5563; color: #f3f4f6; border-radius: 10px; font-family: 'Inter'; transition: border-color 0.2s ease;">
+                            <button id="applyMemoryLimit" class="apply-btn">Применить</button>
+                        </div>
+                        <div style="color: #9ca3af; font-size: 15px; margin-top: 12px;">Текущая память: <span id="currentMemoryUsage">N/A</span> МБ</div>
+                    </div>
+                </div>
+                <div class="collapsible-section" style="margin-bottom: 20px;">
+                    <div class="section-header" style="display: flex; justify-content: space-between; cursor: pointer;">
+                        <div style="font-weight: 600; color: #f3f4f6;">Видимость</div>
+                        <button class="toggle-section" style="background: none; border: none; color: #f3f4f6; cursor: pointer; transition: transform 0.3s ease;">▶</button>
+                    </div>
+                    <div class="section-content" style="display: none;">
+                        <label style="display: flex; align-items: center; gap: 12px; margin: 14px 0; color: #d1d5db;">
+                            <input type="checkbox" id="showTable" ${isTableVisible ? 'checked' : ''} style="accent-color: #f87171; width: 18px; height: 18px; cursor: pointer;">
+                            Показать таблицы транзакций
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 12px; color: #d1d5db;">
+                            <input type="checkbox" id="showPriceTable" ${isPriceTableVisible ? 'checked' : ''} style="accent-color: #f87171; width: 18px; height: 18px; cursor: pointer;">
+                            Показать таблицу цен
+                        </label>
+                    </div>
+                </div>
+                <div class="collapsible-section" style="margin-bottom: 20px;">
+                    <div class="section-header" style="display: flex; justify-content: space-between; cursor: pointer;">
+                        <div style="font-weight: 600; color: #f3f4f6;">Звук</div>
+                        <button class="toggle-section" style="background: none; border: none; color: #f3f4f6; cursor: pointer; transition: transform 0.3s ease;">▶</button>
+                    </div>
+                    <div class="section-content" style="display: none;">
+                        <label style="display: flex; align-items: center; gap: 12px; margin: 14px 0; color: #d1d5db;">
+                            <input type="checkbox" id="soundTable" ${isSoundEnabled ? 'checked' : ''} style="accent-color: #f87171; width: 18px; height: 18px; cursor: pointer;">
+                            Включить звук
+                        </label>
+                        <div style="margin: 14px 0;">
+                            <label style="display: flex; align-items: center; gap: 12px; color: #d1d5db;">
+                                <input type="radio" name="soundOption" value="option1" ${selectedSound === 'option1' ? 'checked' : ''} style="accent-color: #f87171; width: 18px; height: 18px; cursor: pointer;">
+                                Стандартный
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 12px; margin-top: 12px; color: #d1d5db;">
+                                <input type="radio" name="soundOption" value="option2" ${selectedSound === 'option2' ? 'checked' : ''} style="accent-color: #f87171; width: 18px; height: 18px; cursor: pointer;">
+                                Классический
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 12px; margin-top: 12px; color: #d1d5db;">
+                                <input type="radio" name="soundOption" value="option3" ${selectedSound === 'option3' ? 'checked' : ''} style="accent-color: #f87171; width: 18px; height: 18px; cursor: pointer;">
+                                Мощный
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div class="collapsible-section" style="margin-bottom: 20px;">
+                    <div class="section-header" style="display: flex; justify-content: space-between; cursor: pointer;">
+                        <div style="font-weight: 600; color: #f3f4f6;">Режим звука</div>
+                        <button class="toggle-section" style="background: none; border: none; color: #f3f4f6; cursor: pointer; transition: transform 0.3s ease;">▶</button>
+                    </div>
+                    <div class="section-content" style="display: none;">
+                        <label style="display: flex; align-items: center; gap: 12px; margin: 14px 0; color: #d1d5db;">
+                            <input type="radio" name="soundMode" value="transaction" ${soundMode === 'transaction' ? 'checked' : ''} style="accent-color: #f87171; width: 18px; height: 18px; cursor: pointer;">
+                            По транзакциям
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 12px; margin-top: 12px; color: #d1d5db;">
+                            <input type="radio" name="soundMode" value="dominance" ${soundMode === 'dominance' ? 'checked' : ''} style="accent-color: #f87171; width: 18px; height: 18px; cursor: pointer;">
+                            По смене доминирования
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 12px; margin-top: 12px; color: #d1d5db;">
+                            <input type="radio" name="soundMode" value="difference" ${soundMode === 'difference' ? 'checked' : ''} style="accent-color: #f87171; width: 18px; height: 18px; cursor: pointer;">
+                            По изменению разницы
+                        </label>
+                    </div>
+                </div>
+                <div class="collapsible-section">
+                    <div class="section-header" style="display: flex; justify-content: space-between; cursor: pointer;">
+                        <div style="font-weight: 600; color: #f3f4f6;">Цвет фона</div>
+                        <button class="toggle-section" style="background: none; border: none; color: #f3f4f6; cursor: pointer; transition: transform 0.3s ease;">▶</button>
+                    </div>
+                    <div class="section-content" style="display: none;">
+                        <input type="color" id="backgroundColorPicker" value="${currentBackgroundColor}" style="width: 100%; height: 50px; cursor: pointer; margin-top: 14px; border-radius: 10px; border: 1px solid #4b5563; transition: border-color 0.2s ease;">
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(filterPanel);
+
+        const style = document.createElement('style');
+        style.textContent = `
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono&display=swap');
+            .gmgn-script-container {
+                transform: translateY(0);
+                opacity: 1;
+                transition: transform 0.3s ease, opacity 0.3s ease;
+            }
+            .gmgn-script-container .apply-btn {
+                background: linear-gradient(135deg, #f87171, #fb923c);
+                color: white;
+                border: none;
+                padding: 12px 20px;
+                cursor: pointer;
+                border-radius: 12px;
+                font-weight: 600;
+                font-size: 15px;
+                transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+            }
+            .gmgn-script-container .apply-btn:hover {
+                transform: translateY(-3px);
+                box-shadow: 0 8px 20px rgba(248, 113, 113, 0.4);
+                background: linear-gradient(135deg, #fb923c, #f87171);
+            }
+            .gmgn-script-container .filter-btn {
+                background: #2d2d2d;
+                color: #d1d5db;
+                border: 1px solid #4b5563;
+                padding: 12px 20px;
+                cursor: pointer;
+                border-radius: 12px;
+                font-weight: 500;
+                font-size: 15px;
+                transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+            }
+            .gmgn-script-container .filter-btn:hover {
+                background: #4b5563;
+                color: #f3f4f6;
+                transform: translateY(-2px);
+            }
+            .gmgn-script-container .filter-btn.active {
+                background: #34d399;
+                border-color: #34d399;
+                color: #1f2937;
+                transform: translateY(-2px);
+            }
+            .gmgn-script-container input[type="checkbox"], .gmgn-script-container input[type="radio"] {
+                width: 18px;
+                height: 18px;
+                cursor: pointer;
+                transition: transform 0.2s ease;
+            }
+            .gmgn-script-container input[type="checkbox"]:hover, .gmgn-script-container input[type="radio"]:hover {
+                transform: scale(1.1);
+            }
+            .gmgn-script-container input[type="number"]:focus, .gmgn-script-container input[type="text"]:focus {
+                border-color: #f87171;
+                outline: none;
+            }
+            .collapsible-section .section-content {
+                max-height: 600px;
+                overflow: hidden;
+                opacity: 1;
+                transition: max-height 0.3s ease, opacity 0.3s ease;
+            }
+            .collapsible-section .section-content[style*="display: none"] {
+                max-height: 0;
+                opacity: 0;
+            }
+            .section-header:hover {
+                color: #f87171;
+                transition: color 0.2s ease;
+            }
+        `;
+        document.head.appendChild(style);
+
+        document.addEventListener('click', (e) => {
+            const target = e.target;
+            if (target.id === 'toggleFilters') {
+                const filterContent = document.getElementById('filterContent');
+                const isOpening = filterContent.style.display === 'none';
+                filterContent.style.display = isOpening ? 'block' : 'none';
+                filterContent.style.opacity = isOpening ? '1' : '0';
+                filterContent.style.transform = isOpening ? 'translateY(0)' : 'translateY(10px)';
+                target.style.transform = isOpening ? 'rotate(90deg)' : 'rotate(0deg)';
+            }
+            if (target.closest('.section-header')) {
+                const header = target.closest('.section-header');
+                const section = header.nextElementSibling;
+                const toggleButton = header.querySelector('.toggle-section');
+                const isOpening = section.style.display === 'none';
+                section.style.display = isOpening ? 'block' : 'none';
+                toggleButton.textContent = isOpening ? '▼' : '▶';
+                toggleButton.style.transform = isOpening ? 'rotate(0deg)' : 'rotate(-90deg)';
+            }
+            if (target.classList.contains('amount-btn')) {
+                currentFilterAmount = parseInt(target.getAttribute('data-amount'));
+                updateFilterDisplay();
+                updateFilterButtonStyles();
+                saveSettings();
+            }
+            if (target.id === 'applyCustomFilter') {
+                const input = document.getElementById('customFilterAmount');
+                const value = parseFloat(input.value);
+                if (!isNaN(value) && value > 0) {
+                    currentFilterAmount = value;
+                    updateFilterDisplay();
+                    updateFilterButtonStyles();
+                    input.value = '';
+                    saveSettings();
+                }
+            }
+            if (target.id === 'addAmountButton') {
+                const input = document.getElementById('newAmountButton');
+                const value = parseFloat(input.value);
+                if (!isNaN(value) && value > 0 && !customAmountButtons.includes(value)) {
+                    customAmountButtons.push(value);
+                    customAmountButtons.sort((a, b) => a - b);
+                    updateAmountButtons();
+                    input.value = '';
+                    saveSettings();
+                }
+            }
+            if (target.classList.contains('time-btn')) {
+                currentFilterTime = parseInt(target.getAttribute('data-time'));
+                updateTimeFilterDisplay();
+                updateTimeFilterButtonStyles();
+                saveSettings();
+            }
+            if (target.id === 'applyCustomTimeFilter') {
+                const input = document.getElementById('customFilterTime');
+                const value = parseInt(input.value);
+                if (!isNaN(value) && value > 0) {
+                    currentFilterTime = value;
+                    updateTimeFilterDisplay();
+                    updateTimeFilterButtonStyles();
+                    input.value = '';
+                    saveSettings();
+                }
+            }
+            if (target.id === 'addToken') {
+                const address = document.getElementById('newTokenAddress').value.trim();
+                const ticker = document.getElementById('newTokenTicker').value.trim();
+                const mexcSymbol = document.getElementById('newTokenMexcSymbol').value.trim();
+                if (address && ticker && mexcSymbol) {
+                    const customTokens = GM_getValue('customTokens', []);
+                    customTokens.push({ address, ticker, mexcSymbol });
+                    GM_setValue('customTokens', customTokens);
+                    tokenList.push({ address, ticker, mexcSymbol });
+                    if (address.toLowerCase() === currentTokenAddress.toLowerCase()) {
+                        initMexcWebSocket([mexcSymbol]);
+                    }
+                    document.getElementById('newTokenAddress').value = '';
+                    document.getElementById('newTokenTicker').value = '';
+                    document.getElementById('newTokenMexcSymbol').value = '';
+                    alert('Токен добавлен!');
+                    log('Добавлен новый токен', { address, ticker, mexcSymbol });
+                } else {
+                    alert('Заполните все поля для добавления токена.');
+                }
+            }
+            if (target.id === 'addTable') {
+                createTransactionTable();
+                updateTableList();
+            }
+            if (target.classList.contains('remove-table-btn')) {
+                const tableId = target.getAttribute('data-table-id');
+                const tableObj = tables.find(t => t.id === tableId);
+                if (tableObj) {
+                    clearInterval(tableObj.table.getAttribute('data-timer-id'));
+                    tableObj.table.remove();
+                    tables = tables.filter(t => t.id !== tableId);
+                    updateTableList();
+                }
+            }
+            if (target.id === 'applyMemoryLimit') {
+                const input = document.getElementById('memoryLimit');
+                const value = parseInt(input.value);
+                if (!isNaN(value) && value > 0) {
+                    memoryLimit = value;
+                    saveSettings();
+                    updateMemoryDisplay();
+                }
+            }
+        });
+
+        document.addEventListener('change', (e) => {
+            const target = e.target;
+            if (target.id === 'showTable') {
+                isTableVisible = target.checked;
+                updateAllTransactionTables();
+                saveSettings();
+            }
+            if (target.id === 'showPriceTable') {
+                isPriceTableVisible = target.checked;
+                updatePriceTable();
+                saveSettings();
+            }
+            if (target.id === 'soundTable') {
+                isSoundEnabled = target.checked;
+                saveSettings();
+            }
+            if (target.name === 'soundMode') {
+                soundMode = target.value;
+                saveSettings();
+            }
+            if (target.name === 'soundOption') {
+                selectedSound = target.value;
+                saveSettings();
+            }
+            if (target.id === 'backgroundColorPicker') {
+                applyBackgroundColor(target.value);
+            }
+            if (target.id === 'tableScale') {
+                tableScale = parseFloat(target.value);
+                document.getElementById('currentScaleDisplay').textContent = `${(tableScale * 100).toFixed(0)}%`;
+                applyTableScale();
+            }
+            if (target.id === 'mergeTransactions') {
+                mergeTransactions = target.checked;
+                saveSettings();
+            }
+            if (target.name === 'mergeWindow') {
+                mergeWindow = parseInt(target.value);
+                saveSettings();
+            }
+            if (target.id === 'monitorMemory') {
+                monitorMemory = target.checked;
+                saveSettings();
+                if (monitorMemory) monitorMemoryUsage();
+            }
+        });
+    }
+
+    function updateAmountButtons() {
+        const amountButtonsContainer = document.getElementById('amountButtons');
+        if (amountButtonsContainer) {
+            amountButtonsContainer.innerHTML = customAmountButtons.map(amount => `<button class="filter-btn amount-btn" data-amount="${amount}">${amount} $</button>`).join('');
+            updateFilterButtonStyles();
+        }
+    }
+
+    function updateFilterDisplay() {
+        const display = document.getElementById('currentFilterDisplay');
+        if (display) display.textContent = `Текущий: ${currentFilterAmount} $`;
+    }
+
+    function updateFilterButtonStyles() {
+        document.querySelectorAll('.gmgn-script-container .amount-btn').forEach(btn => {
+            const amount = parseInt(btn.getAttribute('data-amount'));
+            btn.classList.toggle('active', amount === currentFilterAmount);
+        });
+    }
+
+    function updateTimeFilterDisplay() {
+        const display = document.getElementById('currentTimeFilterDisplay');
+        if (display) display.textContent = `Текущий: ${currentFilterTime}с`;
+    }
+
+    function updateTimeFilterButtonStyles() {
+        document.querySelectorAll('.gmgn-script-container .time-btn').forEach(btn => {
+            const time = parseInt(btn.getAttribute('data-time'));
+            btn.classList.toggle('active', time === currentFilterTime);
+        });
+    }
+
+function createTransactionTable(tokenAddress = currentTokenAddress, chain = currentChain) {
+    const tableId = `table-${Math.random().toString(36).substr(2, 9)}`;
+    const table = document.createElement('div');
+    table.className = 'gmgn-script-container';
+    table.id = tableId;
+    table.style.cssText = `
+        position: fixed;
+        top: ${20 + tables.length * 50}px;
+        left: calc(50% - 320px);
+        background: rgba(30, 30, 30, 0.98);
+        color: white;
+        padding: 24px;
+        border-radius: 20px;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+        z-index: 1000;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        width: 640px;
+        max-height: 500px;
+        overflow-y: auto;
+        cursor: move;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        backdrop-filter: blur(12px);
+        transform: scale(${tableScale});
+        transform-origin: top left;
+        resize: both;
+    `;
+    document.body.appendChild(table);
+    applyBackgroundColor(currentBackgroundColor);
+
+    let isDragging = false;
+    let xOffset = 0, yOffset = 0;
+    const onMouseDown = (e) => {
+        const rect = table.getBoundingClientRect();
+        const isResizeHandle = e.clientX > rect.right - 15 && e.clientY > rect.bottom - 15;
+        if (!isResizeHandle) {
+            isDragging = true;
+            xOffset = e.clientX - rect.left;
+            yOffset = e.clientY - rect.top;
+        }
+    };
+    const onMouseMove = (e) => {
+        if (isDragging) {
+            e.preventDefault();
+            table.style.left = `${e.clientX - xOffset}px`;
+            table.style.top = `${e.clientY - yOffset}px`;
+        }
+    };
+    const onMouseUp = () => { isDragging = false; };
+    table.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+    table.dataset.listeners = 'true';
+    tables.push({
+        id: tableId,
+        table,
+        tokenAddress,
+        chain,
+        filterAmount: currentFilterAmount, // Per-table filter
+        filterTime: currentFilterTime,     // Per-table time filter
+        selectedSound: selectedSound       // Per-table sound option
+    });
+    updateTableList();
+    updateFilterPanel();
+    return table;
+}
+
+    function updateTableList() {
+        const tableList = document.getElementById('tableList');
+        if (tableList) {
+            tableList.innerHTML = tables.map(t => `
+                <div style="display: flex; align-items: center; gap: 12px; margin: 10px 0;">
+                    <span style="color: #d1d5db;">Таблица ${t.id}: ${t.tokenAddress || 'Текущий токен'}</span>
+                    <button class="apply-btn remove-table-btn" data-table-id="${t.id}">Удалить</button>
+                </div>
+            `).join('');
+        }
+    }
+
+    function updateAllTransactionTables() {
+        tables.forEach(t => {
+            if (t.tokenAddress === currentTokenAddress || !t.tokenAddress) {
+                updateTransactionTable(t.table);
+            }
+        });
+    }
+
+    function updateTransactionTable(table) {
+        const now = Date.now();
+        transactionQueue.buy = transactionQueue.buy.filter(t => (now - t.startTime) / 1000 < currentFilterTime);
+        transactionQueue.sell = transactionQueue.sell.filter(t => (now - t.startTime) / 1000 < currentFilterTime);
+
+        const buyTotal = transactionQueue.buy.reduce((sum, t) => sum + t.amount, 0);
+        const sellTotal = transactionQueue.sell.reduce((sum, t) => sum + t.amount, 0);
+        const difference = buyTotal - sellTotal;
+
+        if (isSoundEnabled && soundMode === 'dominance') {
+            let currentDominance = difference > 0 ? 'buy' : difference < 0 ? 'sell' : 'neutral';
+            if (isNewTransaction && currentDominance !== lastDominance) {
+                if (currentDominance === 'buy') pendingAudioQueue.push({ type: 'buy' });
+                else if (currentDominance === 'sell') pendingAudioQueue.push({ type: 'sell' });
+                playPendingAudio();
+            }
+            lastDominance = currentDominance;
+            isNewTransaction = false;
+        }
+
+        if (isSoundEnabled && soundMode === 'difference') {
+            if (isNewTransaction && difference !== lastDifference) {
+                if (difference > 0) pendingAudioQueue.push({ type: 'buy' });
+                else if (difference < 0) pendingAudioQueue.push({ type: 'sell' });
+                playPendingAudio();
+            }
+            lastDifference = difference;
+            isNewTransaction = false;
+        }
+
+        const differenceBackground = difference >= 0 ? 'rgba(52, 211, 153, 0.15)' : 'rgba(248, 113, 113, 0.15)';
+        table.innerHTML = `
+            <div style="display: flex; justify-content: space-between; margin-bottom: 16px;">
+                <div style="font-weight: 700; color: #34d399;">Покупка: $${formatNumberWithSpaces(buyTotal.toFixed(2))}</div>
+                <div style="font-weight: 700; color: #f87171;">Продажа: $${formatNumberWithSpaces(sellTotal.toFixed(2))}</div>
+            </div>
+            <div style="text-align: center; margin-bottom: 16px; padding: 12px; background: ${differenceBackground}; border-radius: 12px;">
+                <span style="font-weight: 700; color: #f3f4f6;">
+                    ${difference >= 0 ? `Покупка $${formatNumberWithSpaces(difference.toFixed(2))}` : `Продажа $${formatNumberWithSpaces(Math.abs(difference).toFixed(2))}`}
+                </span>
+            </div>
+            <div style="display: flex; justify-content: space-between; flex-grow: 1;">
+                <div style="width: 48%;">
+                    <strong style="color: #34d399; font-weight: 600;">Покупка:</strong>
+                    ${transactionQueue.buy.map(t => {
+                        const secondsElapsed = Math.min(Math.floor((now - t.startTime) / 1000), currentFilterTime);
+                        const priceChange = mexcPrice && t.transactionPrice ? (((mexcPrice - t.transactionPrice) / t.transactionPrice) * 100).toFixed(2) : 'N/A';
+                        const priceColor = priceChange !== 'N/A' ? (priceChange >= 0 ? '#34d399' : '#f87171') : '#9ca3af';
+                        const priceDisplay = priceChange !== 'N/A' ? (priceChange >= 0 ? `+${priceChange}%` : `${priceChange}%`) : 'N/A';
+                        const transactionPriceStr = t.transactionPrice ? t.transactionPrice.toFixed(priceDecimals) : 'N/A';
+                        return `<div style="margin: 8px 0 8px 12px; color: #9ca3af; font-family: 'JetBrains Mono', monospace; display: flex; justify-content: space-between;">
+                            <span>$${formatNumberWithSpaces(t.amount.toFixed(2))} @ ${transactionPriceStr} - ${secondsElapsed}с</span>
+                            <span style="color: ${priceColor};">${priceDisplay}</span>
+                        </div>`;
+                    }).join('')}
+                </div>
+                <div style="width: 48%;">
+                    <strong style="color: #f87171; font-weight: 600;">Продажа:</strong>
+                    ${transactionQueue.sell.map(t => {
+                        const secondsElapsed = Math.min(Math.floor((now - t.startTime) / 1000), currentFilterTime);
+                        const priceChange = mexcPrice && t.transactionPrice ? (((mexcPrice - t.transactionPrice) / t.transactionPrice) * 100).toFixed(2) : 'N/A';
+                        const priceColor = priceChange !== 'N/A' ? (priceChange >= 0 ? '#34d399' : '#f87171') : '#9ca3af';
+                        const priceDisplay = priceChange !== 'N/A' ? (priceChange >= 0 ? `+${priceChange}%` : `${priceChange}%`) : 'N/A';
+                        const transactionPriceStr = t.transactionPrice ? t.transactionPrice.toFixed(priceDecimals) : 'N/A';
+                        return `<div style="margin: 8px 0 8px 12px; color: #9ca3af; font-family: 'JetBrains Mono', monospace; display: flex; justify-content: space-between;">
+                            <span>$${formatNumberWithSpaces(t.amount.toFixed(2))} @ ${transactionPriceStr} - ${secondsElapsed}с</span>
+                            <span style="color: ${priceColor};">${priceDisplay}</span>
+                        </div>`;
+                    }).join('')}
+                </div>
+            </div>
+        `;
+        table.style.display = isTableVisible && (transactionQueue.buy.length || transactionQueue.sell.length) ? 'block' : 'none';
+    }
+
+    function playPendingAudio() {
+        if (document.visibilityState !== 'visible') return;
+        while (pendingAudioQueue.length > 0) {
+            const { type } = pendingAudioQueue.shift();
+            const audioToPlay = type === 'buy' ? sounds[selectedSound].buy : sounds[selectedSound].sell;
+            audioToPlay.play().catch(e => log(`Ошибка воспроизведения звука для ${type}`, e));
+        }
+    }
+
+    function monitorMemoryUsage() {
+        if (!monitorMemory || !window.performance.memory) return;
+        const memoryUsage = window.performance.memory.usedJSHeapSize / 1024 / 1024; // MB
+        document.getElementById('currentMemoryUsage').textContent = memoryUsage.toFixed(2);
+        if (memoryUsage > memoryLimit) {
+            log('Превышен лимит памяти, перезагрузка страницы');
+            window.location.reload();
+        }
+    }
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') playPendingAudio();
+    });
+
+    async function checkAndInitialize() {
+        await loadTokens();
+        const params = getChainAndTokenFromURL();
+        if (params && (params.tokenAddress !== currentTokenAddress || params.chain !== currentChain)) {
+            cleanup();
+            currentTokenAddress = params.tokenAddress;
+            currentChain = params.chain;
+            tokenName = getTokenName();
+            initGmgnWebSocket(params.chain, params.tokenAddress);
+            const tokenInfo = tokenList.find(token => token.address.toLowerCase() === params.tokenAddress.toLowerCase());
+            if (tokenInfo) {
+                initMexcWebSocket([tokenInfo.mexcSymbol]);
+            } else {
+                mexcPrice = null;
+                updatePriceTable();
+            }
+            closeBanner();
+            createFilterPanel();
+            createPriceTable();
+            if (tables.length === 0) createTransactionTable();
+            applyTableScale();
+        } else if (!params) {
+            cleanup();
+            currentTokenAddress = null;
+            currentChain = null;
+        }
+    }
+
+    (async () => {
+        loadSettings();
+        const originalPushState = history.pushState;
+        history.pushState = function() {
+            originalPushState.apply(history, arguments);
+            checkAndInitialize();
+        };
+        const originalReplaceState = history.replaceState;
+        history.replaceState = function() {
+            originalReplaceState.apply(history, arguments);
+            checkAndInitialize();
+        };
+        window.addEventListener('popstate', checkAndInitialize);
+        window.addEventListener('beforeunload', cleanup);
+        await checkAndInitialize();
+        setInterval(closeBanner, 500);
+        if (monitorMemory) {
+            setInterval(monitorMemoryUsage, 5000);
+        }
+    })();
+})();
