@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>Токен парса</title>
+    <link rel="stylesheet" href="/style.css">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+<div class="app-container">
+    <header class="app-header">
+        <h1>Токен парса</h1>
+        <div class="header-controls">
+            <button id="theme-toggle" class="btn btn--icon" title="Переключить тему"></button>
+            <button id="sound-toggle" class="btn btn--icon" title="Переключить звук"></button>
+            <button id="custom-themes-btn" class="btn btn--primary">
+                <i class="material-icons-outlined">palette</i> Темы
+            </button>
+            <button id="add-token-btn" class="btn btn--primary">
+                <i class="material-icons-outlined">add</i> Добавить токен
+            </button>
+        </div>
+    </header>
+
+    <main class="token-grid">
+        <div th:each="sub : ${subscriptions}" th:id="'card-' + ${sub.tokenContractAddress}" class="token-card">
+            <div class="card-header">
+                <h2>
+                    <span class="token-title" th:text="${sub.displayName != null ? sub.displayName : (sub.symbol != null ? sub.symbol : 'Неизвестный токен')}"></span>
+                    <small th:text="'(' + ${sub.mexcName} + ')'"></small>
+                </h2>
+                <div class="token-controls">
+                    <button class="btn btn--icon manual-clear" th:data-token="${sub.tokenContractAddress}" title="Очистить транзакции">
+                        <i class="material-icons-outlined">delete_sweep</i>
+                    </button>
+                    <button class="btn btn--icon btn--danger remove-token" th:data-token="${sub.tokenContractAddress}" title="Удалить токен">
+                        <i class="material-icons-outlined">delete</i>
+                    </button>
+                </div>
+            </div>
+            <div class="card-content">
+                <div class="threshold-controls">
+                    <div class="threshold-control">
+                        <label>Порог видимости ($)</label>
+                        <input type="number" class="input threshold-input" th:data-token="${sub.tokenContractAddress}" data-type="view">
+                    </div>
+                    <div class="threshold-control">
+                        <label>Порог уведомлений ($)</label>
+                        <input type="number" class="input threshold-input" th:data-token="${sub.tokenContractAddress}" data-type="notify">
+                    </div>
+                </div>
+                <div class="price-row">
+                    <div class="price-item">
+                        <span>Цена GMGN</span>
+                        <span th:id="'last-price-' + ${sub.tokenContractAddress}" class="price-value">-</span>
+                    </div>
+                    <div class="price-item">
+                        <span>Спред</span><br>
+                        <span th:id="'spread-' + ${sub.tokenContractAddress}" class="spread-value">-</span>
+                    </div>
+                    <div class="price-item">
+                        <span>Цена MEXC</span>
+                        <span th:id="'mexc-price-' + ${sub.tokenContractAddress}" class="price-value">-</span>
+                    </div>
+                    <div class="price-item">
+                        <span>Сеть</span><br>
+                        <span th:text="${sub.network}">-</span>
+                    </div>
+                </div>
+                <div class="transactions-header">
+                    <h3>Транзакции</h3>
+                    <span class="next-clear-text" th:id="'next-clear-' + ${sub.tokenContractAddress}"></span>
+                </div>
+                <div class="transactions" th:id="'transactions-' + ${sub.tokenContractAddress}"></div>
+            </div>
+        </div>
+    </main>
+
+    <div id="add-token-overlay" class="overlay"></div>
+    <div id="add-token-form" class="modal">
+        <div class="modal-header">
+            <h3>Добавить токен</h3>
+            <button id="close-add-token" class="btn btn--icon">
+                <i class="material-icons-outlined">close</i>
+            </button>
+        </div>
+        <div class="modal-content">
+            <div class="form-group">
+                <label>URL GMGN</label>
+                <input id="gmgn-url" class="input" type="text" placeholder="URL">
+                <small>Пример: https://gmgn.ai/sol/token/0x1234...</small>
+            </div>
+            <div class="form-group">
+                <label>Название пары MEXC</label>
+                <input id="mexc-name" class="input" type="text" placeholder="TOKEN">
+                <small>Пример: DARK (автоматически добавится _USDT)</small>
+            </div>
+            <div class="form-group">
+                <label>Отображаемое имя</label>
+                <input id="display-name" class="input" type="text" placeholder="Название токена">
+            </div>
+            <div class="form-group">
+                <label>Символ токена</label>
+                <input id="symbol-name" class="input" type="text" placeholder="TOKEN">
+            </div>
+            <button id="submit-token" class="btn btn--primary btn--full">Добавить токен</button>
+        </div>
+    </div>
+
+    <div id="custom-themes-overlay" class="overlay"></div>
+    <div id="custom-themes-form" class="modal">
+        <div class="modal-header">
+            <h3>Настроить темы</h3>
+            <button id="close-custom-themes" class="btn btn--icon">
+                <i class="material-icons-outlined">close</i>
+            </button>
+        </div>
+        <div class="modal-content">
+            <div class="form-group">
+                <label>Название темы</label>
+                <input id="theme-name" class="input" type="text" placeholder="Моя тема">
+            </div>
+            <div id="theme-vars-list"></div>
+            <button id="save-theme-btn" class="btn btn--primary btn--full">Сохранить тему</button>
+            <div id="themes-list"></div>
+        </div>
+    </div>
+
+    <audio id="notification-sound" src="/static/notification.mp3"></audio>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+<script src="/main.js"></script>
+<script src="/themes.js"></script>
+</body>
+</html>

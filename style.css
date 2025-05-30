@@ -1,0 +1,503 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+    --bg-color: #0a0e1a;
+    --card-bg: rgba(20, 25, 40, 0.7);
+    --text-color: #e0e6ff;
+    --header-bg: rgba(30, 35, 50, 0.8);
+    --header-text: #ffffff;
+    --transaction-bg: rgba(25, 30, 45, 0.8);
+    --transaction-up: #4ade80;
+    --transaction-down: #f87171;
+    --notification-bg: rgba(50, 60, 90, 0.9);
+    --border-color: rgba(60, 70, 100, 0.5);
+    --remove-btn: #ef4444;
+    --success-color: #4ade80;
+    --error-color: #f87171;
+    --accent-color: #7c3aed;
+    --primary-color: #3b82f6;
+    --muted-success: #4a7f60;
+    --muted-error: #8b4a4a;
+    --ripple-color: rgba(255, 255, 255, 0.2);
+    --overlay-bg: rgba(10, 14, 26, 0.9);
+    --shadow-1: 0 4px 20px rgba(0, 0, 0, 0.3);
+    --shadow-2: 0 8px 30px rgba(0, 0, 0, 0.4);
+    --transition-fast: 0.2s ease-out;
+    --transition-slow: 0.4s ease-out;
+}
+
+:root.light-mode {
+    --bg-color: #f0f2f5;
+    --card-bg: rgba(255, 255, 255, 0.9);
+    --text-color: #1a1a1a;
+    --header-bg: rgba(245, 245, 245, 0.9);
+    --header-text: #1a1a1a;
+    --transaction-bg: rgba(240, 240, 240, 0.9);
+    --transaction-up: #4ade80;
+    --transaction-down: #f87171;
+    --notification-bg: rgba(220, 220, 220, 0.9);
+    --border-color: rgba(180, 180, 180, 0.5);
+    --remove-btn: #ef4444;
+    --success-color: #4ade80;
+    --error-color: #f87171;
+    --accent-color: #7c3aed;
+    --primary-color: #3b82f6;
+    --muted-success: #4a7f60;
+    --muted-error: #8b4a4a;
+    --ripple-color: rgba(0, 0, 0, 0.1);
+    --overlay-bg: rgba(200, 200, 200, 0.7);
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    background: linear-gradient(135deg, var(--bg-color), #d1d5db);
+    color: var(--text-color);
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+    transition: background var(--transition-slow), color var(--transition-slow);
+}
+
+body.dark-mode {
+    background: linear-gradient(135deg, var(--bg-color), #1e293b);
+}
+
+.app-container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+.app-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 2rem;
+    padding: 1rem;
+    background: var(--header-bg);
+    border-radius: 16px;
+    backdrop-filter: blur(10px);
+    box-shadow: var(--shadow-1);
+}
+
+.app-header h1 {
+    margin: 0;
+    font-size: 1.8rem;
+    font-weight: 600;
+    color: var(--header-text);
+}
+
+.header-controls {
+    display: flex;
+    gap: 0.75rem;
+}
+
+.token-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+    gap: 1.5rem;
+}
+
+.token-card {
+    background: var(--card-bg);
+    border-radius: 16px;
+    box-shadow: var(--shadow-1);
+    backdrop-filter: blur(10px);
+    transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.token-card:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-2);
+}
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1.25rem;
+    background: var(--header-bg);
+    border-bottom: 1px solid var(--border-color);
+    border-radius: 16px 16px 0 0;
+}
+
+.card-header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.token-title {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--primary-color);
+}
+
+.card-header small {
+    font-size: 0.9rem;
+    color: #94a3b8;
+    margin-left: 0.5rem;
+}
+
+.token-controls {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.card-content {
+    padding: 1.5rem;
+}
+
+.threshold-controls {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap; /* Позволяем элементам переноситься */
+}
+
+.threshold-control {
+    flex: 1;
+    min-width: 150px; /* Минимальная ширина */
+}
+
+.threshold-controls .threshold-control .input {
+    max-width: 200px; /* Match the general .input max-width */
+    width: 100%; /* Адаптивная ширина */
+}
+
+.price-row {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+}
+
+.price-diff {
+    flex: 0 0 60px;
+    padding: 0.75rem;
+    text-align: center;
+}
+
+.price-item {
+    flex: 1;
+    min-width: 100px;
+    padding: 0.75rem;
+    background: var(--transaction-bg);
+    border-radius: 8px;
+    text-align: center;
+}
+
+.price-value {
+    display: block;
+    color: var(--text-color);
+    transition: color var(--transition-fast);
+}
+
+.price-value.price-up {
+    color: var(--success-color);
+}
+
+.price-diff-value {
+    font-size: 0.85rem;
+    transition: color var(--transition-fast);
+}
+
+.transactions-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.75rem;
+}
+
+.transactions-header h3 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.next-clear-text {
+    font-size: 0.85rem;
+    color: #94a3b8;
+}
+
+.transactions {
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0.5rem;
+    background: var(--transaction-bg);
+}
+
+.transaction {
+    padding: 0.75rem;
+    margin-bottom: 0.5rem;
+    border-radius: 8px;
+    background: var(--transaction-bg);
+    border-left: 4px solid var(--primary-color);
+    transition: transform var(--transition-fast), background var(--transition-fast);
+    font-size: 0.95rem;
+    animation: fadeIn 0.5s ease-in-out;
+}
+
+.transaction.notification.buy {
+    border-left-color: var(--success-color);
+    background: rgba(74, 222, 128, 0.1);
+}
+
+.transaction.notification.sell {
+    border-left-color: var(--error-color);
+    background: rgba(248, 113, 113, 0.1);
+}
+
+.transaction.buy {
+    border-left-color: var(--muted-success);
+}
+
+.transaction.sell {
+    border-left-color: var(--muted-error);
+}
+
+.text-success {
+    color: var(--success-color);
+}
+
+.text-error {
+    color: var(--error-color);
+}
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1.25rem;
+    border: none;
+    border-radius: 12px;
+    background: linear-gradient(135deg, var(--primary-color), var(--accent-color));
+    color: #fff;
+    font-size: 0.95rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
+    position: relative;
+    overflow: hidden;
+}
+
+.btn:hover {
+    background: linear-gradient(135deg, var(--accent-color), var(--primary-color));
+    box-shadow: var(--shadow-1);
+    transform: translateY(-2px);
+}
+
+.btn:active {
+    transform: scale(0.95);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+}
+
+.btn--icon {
+    padding: 0.5rem;
+    background: transparent;
+    border-radius: 50%;
+    box-shadow: none;
+}
+
+.btn--danger {
+    background: var(--remove-btn);
+}
+
+.btn--full {
+    width: 100%;
+    justify-content: center;
+}
+
+.btn .material-icons-outlined {
+    font-size: 1.2rem;
+}
+
+.btn .ripple {
+    position: absolute;
+    border-radius: 50%;
+    background: var(--ripple-color);
+    transform: scale(0);
+    animation: ripple 0.6s linear;
+    pointer-events: none;
+}
+
+.input {
+    width: 100%;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--transaction-bg);
+    color: var(--text-color);
+    font-size: 0.95rem;
+    outline: none;
+    transition: border var(--transition-fast), box-shadow var(--transition-fast);
+    padding: 12px 0 12px 8px;
+}
+.input:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: var(--overlay-bg);
+    backdrop-filter: blur(5px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--transition-slow);
+    z-index: 1000;
+}
+
+.overlay.visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.95);
+    width: 90%;
+    max-width: 450px;
+    background: var(--card-bg);
+    border-radius: 16px;
+    box-shadow: var(--shadow-2);
+    backdrop-filter: blur(10px);
+    padding: 1.5rem;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--transition-slow), transform var(--transition-slow);
+    z-index: 1001;
+}
+
+.modal.show {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate(-50%, -50%) scale(1);
+    animation: popIn 0.3s ease-out;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.modal-header h3 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--header-text);
+}
+
+.form-group {
+    margin-bottom: 1rem;
+}
+
+.form-group label {
+    display: block;
+    font-size: 0.9rem;
+    font-weight: 500;
+    margin-bottom: 0.25rem;
+    color: var(--accent-color);
+}
+
+.form-group small {
+    font-size: 0.8rem;
+    color: #94a3b8;
+    margin-top: 0.25rem;
+    display: block;
+}
+
+.token-avatar-wrap {
+    position: relative;
+    display: inline-block;
+    width: 28px;
+    height: 28px;
+    margin-right: 0.5rem;
+}
+
+.token-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.chain-logo {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    position: absolute;
+    bottom: -2px;
+    right: -2px;
+    border: 1px solid var(--card-bg);
+}
+
+.token-fullname {
+    font-size: 0.85rem;
+    color: #94a3b8;
+    margin-left: 0.5rem;
+}
+
+/* Стили для спреда */
+.spread-value {
+    font-weight: normal; /* Убираем жирный шрифт */
+}
+
+.dark-mode .price-item,
+.dark-mode .spread-value {
+    color: #fff;
+}
+
+@keyframes ripple {
+    to {
+        transform: scale(4);
+        opacity: 0;
+    }
+}
+
+@keyframes popIn {
+    from { transform: translate(-50%, -50%) scale(0.8); opacity: 0; }
+    to { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 768px) {
+    .app-container {
+        padding: 1rem;
+    }
+    .token-grid {
+        grid-template-columns: 1fr;
+    }
+    .threshold-controls, .price-row {
+        flex-direction: column;
+    }
+    .app-header {
+        flex-direction: column;
+        gap: 1rem;
+        text-align: center;
+    }
+    .input {
+        max-width: 150px; /* Smaller inputs on mobile for better fit */
+    }
+    .threshold-controls .threshold-control .input {
+        max-width: 150px; /* Match mobile input width */
+        padding: 12px 0;
+    }
+}
